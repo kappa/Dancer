@@ -4,13 +4,12 @@ use Test::More import => ['!pass'];
 use Dancer ':syntax';
 use Dancer::Test;
 
-plan skip_all => "LWP::UserAgent is needed to run this tests"
-    unless Dancer::ModuleLoader->load('LWP::UserAgent');
-
 plan skip_all => 'Test::TCP is needed to run this test'
     unless Dancer::ModuleLoader->load('Test::TCP');
 
-plan tests => 26;
+use LWP::UserAgent;
+
+plan tests => 29;
 
 ok(Dancer::App->current->registry->is_empty,
     "registry is empty");
@@ -45,6 +44,7 @@ Test::TCP::test_tcp(
             if ( $query->{success} == 1) {
                 ok $res->is_success;
                 is $res->content, $query->{content};
+                like $res->header('Content-Type'), qr/text\/xml/ if $query->{ajax} == 1;
             }
             else {
                 ok !$res->is_success;

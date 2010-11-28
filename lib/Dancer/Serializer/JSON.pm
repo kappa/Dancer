@@ -2,6 +2,7 @@ package Dancer::Serializer::JSON;
 
 use strict;
 use warnings;
+use Carp;
 use Dancer::ModuleLoader;
 use Dancer::Config 'setting';
 use base 'Dancer::Serializer::Abstract';
@@ -10,15 +11,13 @@ use base 'Dancer::Serializer::Abstract';
 # helpers
 
 sub from_json {
-    my ($json) = @_;
     my $s = Dancer::Serializer::JSON->new;
-    $s->deserialize($json);
+    $s->deserialize(@_);
 }
 
 sub to_json {
-    my ($data) = @_;
     my $s = Dancer::Serializer::JSON->new;
-    $s->serialize($data);
+    $s->serialize(@_);
 }
 
 # class definition
@@ -27,31 +26,30 @@ sub loaded { Dancer::ModuleLoader->load('JSON') }
 
 sub init {
     my ($self) = @_;
-    die 'JSON is needed and is not installed'
+    croak 'JSON is needed and is not installed'
       unless $self->loaded;
 }
 
 sub serialize {
-    my ($self, $entity) = @_;
-    my $json = JSON->new();
+    my ($self, $entity, %options) = @_;
 
     # Why doesn't $self->config have this?
     my $config = setting('engines') || {};
     $config = $config->{JSON} || {};
 
-    if ($config->{allow_blessed}) {
-        $json->allow_blessed();
+    if ($config->{allow_blessed} && !defined $options{allow_blessed}) {
+        $options{allow_blessed} = $config->{allow_blessed};
     }
     if ($config->{convert_blessed}) {
-        $json->convert_blessed();
+        $options{convert_blessed} = $config->{convert_blessed};
     }
 
-    $json->utf8->encode($entity);
+    JSON::to_json($entity, \%options);
 }
 
 sub deserialize {
-    my ($self, $entity) = @_;
-    JSON::decode_json($entity);
+    my ($self, $entity, %options) = @_;
+    JSON::from_json($entity, \%options);
 }
 
 sub content_type {'application/json'}

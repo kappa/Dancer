@@ -2,6 +2,7 @@ package Dancer::Serializer::XML;
 
 use strict;
 use warnings;
+use Carp;
 use Dancer::ModuleLoader;
 use base 'Dancer::Serializer::Abstract';
 
@@ -11,36 +12,46 @@ my $_xs;
 # helpers
 
 sub from_xml {
-    my ($xml) = @_;
     my $s = Dancer::Serializer::XML->new;
-    $s->deserialize($xml);
+    $s->deserialize(@_);
 }
 
 sub to_xml {
-    my ($data) = @_;
     my $s = Dancer::Serializer::XML->new;
-    $s->serialize($data);
+    $s->serialize(@_);
 }
 
 # class definition
 
-sub loaded { Dancer::ModuleLoader->load('XML::Simple') }
+sub loaded_xmlsimple {
+    Dancer::ModuleLoader->load('XML::Simple');
+}
+
+sub loaded_xmlbackends {
+    # we need either XML::Parser or XML::SAX too
+    Dancer::ModuleLoader->load('XML::Parser') or
+    Dancer::ModuleLoader->load('XML::SAX');
+}
 
 sub init {
     my ($self) = @_;
     die 'XML::Simple is needed and is not installed'
-      unless $self->loaded;
+      unless $self->loaded_xmlsimple;
+    die 'XML::Simple needs XML::Parser or XML::SAX and neither is installed'
+      unless $self->loaded_xmlbackends;
     $_xs = XML::Simple->new();
 }
 
 sub serialize {
-    my ($self, $entity) = @_;
-    $_xs->XMLout({data => $entity});
+    my $self    = shift;
+    my $entity  = shift;
+    my %options = (RootName => 'data', @_);
+    $_xs->XMLout($entity, %options);
 }
 
 sub deserialize {
-    my ($self, $content) = @_;
-    $_xs->XMLin($content);
+    my $self = shift;
+    $_xs->XMLin(@_);
 }
 
 sub content_type {'text/xml'}

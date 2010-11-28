@@ -5,29 +5,26 @@ use Dancer::ModuleLoader;
 
 plan skip_all => "Plack is needed to run this test"
     unless Dancer::ModuleLoader->load('Plack::Request');
-plan skip_all => "LWP is needed to run this test"
-    unless Dancer::ModuleLoader->load('LWP::UserAgent');
 plan skip_all => "Test::TCP is needed to run this test"
     unless Dancer::ModuleLoader->load('Test::TCP');
 
+use LWP::UserAgent;
+
 Dancer::ModuleLoader->load('Plack::Loader');
 
-my $app = sub {
-    my $env = shift;
-    my $request = Dancer::Request->new($env);
-    Dancer->dance($request);
-};
+my $app = Dancer::Handler->psgi_app;
 
 plan tests => 3;
+
 Test::TCP::test_tcp(
     client => sub {
         my $port = shift;
         my $ua = LWP::UserAgent->new;
-        
+
         my $res = $ua->get("http://127.0.0.1:$port/env");
-        like $res->content, qr/psgi\.version/, 
+        like $res->content, qr/psgi\.version/,
             'content looks good for /env';
-        
+
         $res = $ua->get("http://127.0.0.1:$port/name/bar");
         like $res->content, qr/Your name: bar/,
             'content looks good for /name/bar';
@@ -39,7 +36,9 @@ Test::TCP::test_tcp(
     server => sub {
         my $port = shift;
 
-        use t::lib::TestApp;
+        use File::Spec;
+        use lib File::Spec->catdir( 't', 'lib' );
+        use TestApp;
         use Dancer;
         setting apphandler  => 'PSGI';
         setting environment => 'production';

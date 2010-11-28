@@ -47,7 +47,8 @@ sub _find_content_type {
         $content_types{$request->{accept_type}} = 1;
     }
 
-    $content_types{'application/json'} = 0;
+    $content_types{'application/json'} = 0
+      unless defined $content_types{'application/json'};
 
     return [
         sort { $content_types{$b} <=> $content_types{$a} }
@@ -63,9 +64,10 @@ sub serialize {
 }
 
 sub deserialize {
-    my ($self, $content, $request) = @_;
+    my ($self, $content) = @_;
+    my $request    = Dancer::SharedData->request;
     my $serializer = $self->_load_serializer($request);
-    return $serializer->deserialize($content, $request);
+    return $serializer->deserialize($content);
 }
 
 sub content_type {

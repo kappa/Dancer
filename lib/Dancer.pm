@@ -2,8 +2,8 @@ package Dancer;
 
 use strict;
 use warnings;
-use Carp 'confess';
-use Cwd 'abs_path';
+use Carp;
+use Cwd 'abs_path', 'realpath';
 use vars qw($VERSION $AUTHORITY @EXPORT);
 
 use Dancer::Config;
@@ -26,11 +26,12 @@ use Dancer::Handler;
 use Dancer::ModuleLoader;
 
 use File::Spec;
+use File::Basename 'basename';
 
 use base 'Exporter';
 
 $AUTHORITY = 'SUKRIA';
-$VERSION   = '1.1811';
+$VERSION   = '1.2000';
 @EXPORT    = qw(
   after
   any
@@ -68,6 +69,7 @@ $VERSION   = '1.1811';
   put
   r
   redirect
+  render_with_layout
   request
   send_file
   send_error
@@ -126,14 +128,15 @@ sub logger    { set(logger => @_) }
 sub mime_type { Dancer::Config::mime_types(@_) }
 sub params    { Dancer::SharedData->request->params(@_) }
 sub pass      { Dancer::Response->pass }
-sub path      { Dancer::FileUtils::path(@_) }
+sub path      { realpath(Dancer::FileUtils::path(@_)) }
 sub post   { Dancer::App->current->registry->universal_add('post', @_) }
 sub prefix { Dancer::App->current->set_prefix(@_) }
 sub del     { Dancer::App->current->registry->universal_add('delete',  @_) }
 sub options { Dancer::App->current->registry->universal_add('options', @_) }
 sub put     { Dancer::App->current->registry->universal_add('put',     @_) }
-sub r { warn "'r' is DEPRECATED use qr{} instead"; return {regexp => $_[0]} }
+sub r { carp "'r' is DEPRECATED use qr{} instead"; return {regexp => $_[0]} }
 sub redirect  { Dancer::Helpers::redirect(@_) }
+sub render_with_layout { Dancer::Helpers::render_with_layout(@_); }
 sub request   { Dancer::SharedData->request }
 sub send_file { Dancer::Helpers::send_file(@_) }
 sub set       { goto &setting }
@@ -150,6 +153,7 @@ sub setting {
 sub set_cookie { Dancer::Helpers::set_cookie(@_) }
 
 sub session {
+    croak "Must specify session engine in settings prior to using 'session' keyword" unless setting('session');
     if (@_ == 0) {
         return Dancer::Session->get;
     }
@@ -185,10 +189,12 @@ sub load_app {
     $app->prefix($options{prefix})     if $options{prefix};
     $app->settings($options{settings}) if $options{settings};
 
+
     # load the application
-    use lib path(dirname(File::Spec->rel2abs($0)), 'lib');
-    eval "use $app_name";
-    die "unable to load application $app_name : $@" if $@;
+    my ($package, $script) = caller;
+    _init($script);
+    my ($res, $error) = Dancer::ModuleLoader->load($app_name);
+    $res or croak "unable to load application $app_name : $error";
 
     # restore the main application
     Dancer::App->set_running_app('main');
@@ -205,6 +211,7 @@ sub import {
     my ($package, $script) = caller;
 
     strict->import;
+    utf8->import;
     $class->export_to_level(1, $class, @EXPORT);
 
     # if :syntax option exists, don't change settings
@@ -213,7 +220,9 @@ sub import {
     }
 
     Dancer::GetOpt->process_args();
+
     _init($script);
+    Dancer::Config->load;
 }
 
 # Start/Run the application with the chosen apphandler
@@ -225,19 +234,49 @@ sub start {
     if ($request) {
         return Dancer::Handler->handle_request($request);
     }
-    Dancer::Handler->get_handler()->dance;
+
+    my $handler = Dancer::Handler->get_handler;
+    Dancer::Logger::core("loading handler '".ref($handler)."'");
+    return $handler->dance;
 }
 
-# private
 
 sub _init {
-    my ($path) = @_;
-    setting appdir  => dirname(File::Spec->rel2abs($path));
-    setting public  => path(setting('appdir'), 'public');
-    setting views   => path(setting('appdir'), 'views');
-    setting logger  => 'file';
-    setting confdir => $ENV{DANCER_CONFDIR} || setting('appdir');
-    Dancer::Config->load;
+    my $script      = shift;
+    my $script_path = File::Spec->rel2abs(path(dirname($script)));
+
+    my $LAYOUT_PRE_DANCER_1_2 = 1;
+    $LAYOUT_PRE_DANCER_1_2 = 0
+      if ( basename($script) eq 'app.pl'
+        || basename($script) eq 'dispatch.cgi'
+        || basename($script) eq 'dispatch.fcgi');
+
+    setting appdir => $ENV{DANCER_APPDIR}
+      || (
+          $LAYOUT_PRE_DANCER_1_2
+        ? $script_path
+        : File::Spec->rel2abs(path($script_path, '..'))
+      );
+
+    # once the dancer_appdir have been defined, we export to env
+    $ENV{DANCER_APPDIR} = setting('appdir');
+
+    Dancer::Logger::core(
+        "initializing appdir to: `" . setting('appdir') . "'");
+
+    setting confdir => $ENV{DANCER_CONFDIR}
+      || setting('appdir');
+
+    setting public => $ENV{DANCER_PUBLIC}
+      || path(setting('appdir'), 'public');
+
+    setting views => $ENV{DANCER_VIEWS}
+      || path(setting('appdir'), 'views');
+
+    setting logger => 'file';
+
+    my ($res, $error) = Dancer::ModuleLoader->use_lib(path(setting('appdir'), 'lib'));
+    $res or croak "unable to set libdir : $error";
 }
 
 1;
@@ -350,11 +389,13 @@ them.
 Defines a before_template filter:
 
     before_template sub {
+        my $tokens = shift;
         # do something with request, vars or params
     };
 
 The anonymous function which is given to C<before_template> will be executed
-before sending data and tokens to the template.
+before sending data and tokens to the template. Receives a hashref of the
+tokens that will be inserted into the template.
 
 This filter works as the C<before> and C<after> filter.
 
@@ -414,21 +455,21 @@ Logs a message of error level:
 
 Constant that returns a false value (0).
 
-=head2 from_dumper
+=head2 from_dumper ($structure)
 
 Deserializes a Data::Dumper structure.
 
-=head2 from_json
+=head2 from_json ($structure, %options)
 
-Deserializes a JSON structure.
+Deserializes a JSON structure. Can receive optional arguments. Thoses arguments are valid L<JSON> arguments to change the behavior of the default C<JSON::from_json> function.
 
-=head2 from_yaml
+=head2 from_yaml ($structure)
 
 Deserializes a YAML structure.
 
-=head2 from_xml
+=head2 from_xml ($structure, %options)
 
-Deserializes a XML structure.
+Deserializes a XML structure. Can receive optional arguments. Thoses arguments are valid L<XML::Simple> arguments to change the behavior of the default C<XML::Simple::XMLin> function.
 
 =head2 get
 
@@ -625,6 +666,37 @@ You can also force Dancer to return a specific 300-ish HTTP response code:
     get '/old/:resource', sub {
         redirect '/new/'.params->{resource}, 301;
     };
+    
+It is important to note that issuing a redirect by itself does not exit and
+redirect immediately, redirection is deferred until after the current route
+or filter has been processed. To exit and redirect immediately, use the return
+function, e.g.
+
+    get '/restricted', sub {
+        return redirect '/login' if accessDenied();
+        return 'Welcome to the restricted section';
+    };
+
+=head2 render_with_layout
+
+Allows a handler to provide plain HTML (or other content), but have it rendered
+within the layout still.
+
+For example:
+
+    get '/foo' => sub {
+        # Do something which generates HTML directly (maybe using
+        # HTML::Table::FromDatabase or something)
+        my $content = ...;
+        render_with_layout $content;
+    };
+
+It works very similarly to C<template> in that you can pass tokens to be used in
+the layout, and/or options to control the way the layout is rendered.  For
+instance, to use a custom layout:
+
+    render_with_layout $content, {}, { layout => 'layoutname' };
+
 
 =head2 request
 
@@ -771,21 +843,21 @@ For example, to disable the layout for a specific request:
     };
 
 
-=head2 to_dumper
+=head2 to_dumper ($structure)
 
 Serializes a structure with Data::Dumper.
 
-=head2 to_json
+=head2 to_json ($structure, %options)
 
-Serializes a structure to JSON.
+Serializes a structure to JSON. Can receive optional arguments. Thoses arguments are valid L<JSON> arguments to change the behavior of the default C<JSON::to_json> function.
 
-=head2 to_yaml
+=head2 to_yaml ($structure)
 
 Serializes a structure to YAML.
 
-=head2 to_xml
+=head2 to_xml ($structure, %options)
 
-Serializes a structure to XML.
+Serializes a structure to XML. Can receive optional arguments. Thoses arguments are valid L<XML::Simple> arguments to change the behavior of the default C<XML::Simple::XMLout> function.
 
 =head2 true
 
